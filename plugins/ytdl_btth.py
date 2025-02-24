@@ -12,7 +12,7 @@ from pyrogram import filters
 logging.basicConfig(level=logging.INFO)
 
 # YouTube and Telegram configuration
-YOUTUBE_CHANNEL_ID = 'YOUR_CHANNEL_ID'
+YOUTUBE_CHANNEL_ID = 'UCoL2Zo2GEuMIsHVJyPwSyJg'
 YOUTUBE_API_KEY = 'YOUR_YOUTUBE_API_KEY'
 TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
 MONGO_URI = 'YOUR_MONGO_URI'
