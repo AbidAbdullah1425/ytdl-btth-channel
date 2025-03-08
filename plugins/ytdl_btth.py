@@ -1,74 +1,67 @@
 import os
 import logging
+import yt_dlp
+import asyncio
 import requests
-import pymongo
-from pymongo import MongoClient
-from pytube import YouTube
-from apscheduler.schedulers.background import BackgroundScheduler
 from bot import Bot
-from pyrogram import filters
+from config import OWNER_ID, CHANNEL_ID
+from pyrogram import Client, filters
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# YouTube and Telegram configuration
-YOUTUBE_CHANNEL_ID = 'UCoL2Zo2GEuMIsHVJyPwSyJg'
-YOUTUBE_API_KEY = 'YOUR_YOUTUBE_API_KEY'
-TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
-MONGO_URI = 'YOUR_MONGO_URI'
+# Initialize the scheduler
+scheduler = AsyncIOScheduler()
 
-# Initialize MongoDB client
-client = MongoClient(MONGO_URI)
-db = client['youtube_videos']
-collection = db['video_titles']
+def download_videos(search_term, max_duration):
+    ydl_opts = {
+        'format': 'best',
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'match_filter': yt_dlp.utils.match_filter_func(f"duration <= {max_duration} and title ~ '{search_term}'"),
+    }
 
-scheduler = BackgroundScheduler()
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(f"ytsearch10:{search_term}", download=True)
+        video_files = [os.path.join('downloads', f"{entry['title']}.{entry['ext']}") for entry in info_dict['entries']]
+    
+    return video_files
+
+async def upload_videos(video_files, channel_id):
+    async with Bot:
+        for video_file in video_files:
+            if os.path.exists(video_file):
+                await Bot.send_video(channel_id, video_file, caption=f"Uploading {os.path.basename(video_file)}")
+                os.remove(video_file)
 
 def check_youtube_channel():
-    url = f'https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={YOUTUBE_CHANNEL_ID}&part=snippet,id&order=date&maxResults=5'
-    response = requests.get(url)
-    videos = response.json().get('items', [])
+    search_term = "Battle Through The Heavens"
+    max_duration = 600  # 10 minutes
 
-    for video in videos:
-        if video['id']['kind'] == 'youtube#video':
-            video_id = video['id']['videoId']
-            video_title = video['snippet']['title']
-            video_url = f'https://www.youtube.com/watch?v={video_id}'
-            video_length = YouTube(video_url).length
+    # Download videos matching the search term and upload them
+    video_files = download_videos(search_term, max_duration)
+    asyncio.run(upload_videos(video_files, CHANNEL_ID))
 
-            if 'Battle Through The Heavens' in video_title and video_length < 240:
-                if not collection.find_one({"title": video_title}):
-                    download_and_upload_video(video_url, video_title)
-                    collection.insert_one({"title": video_title})
-                    logging.info(f'Uploaded and saved video: {video_title}')
-                else:
-                    logging.info(f'Video already processed: {video_title}')
-
-def download_and_upload_video(video_url, video_title):
-    try:
-        yt = YouTube(video_url)
-        stream = yt.streams.filter(file_extension='mp4').first()
-        file_path = stream.download()
-
-        Bot.send_video(chat_id=TELEGRAM_CHAT_ID, video=open(file_path, 'rb'), caption=video_title)
-        os.remove(file_path)
-        logging.info(f'Uploaded video to Telegram: {video_title}')
-    except Exception as e:
-        logging.error(f'Failed to download or upload video: {e}')
-
-@Bot.on_message(filters.command("on") & filters.user(bot.OWNER_ID))
+@Bot.on_message(filters.command("on") & filters.user(OWNER_ID))
 async def start_checking(client, message):
     if not scheduler.running:
-        scheduler.add_job(check_youtube_channel, 'interval', minutes=1)
+        scheduler.add_job(check_youtube_channel, 'interval', minutes=10)
         scheduler.start()
-        await message.reply("Started checking the YouTube channel for new videos.")
+        await message.reply("Started checking YouTube for new videos every 10 minutes.")
     else:
         await message.reply("The process is already running.")
 
-@Bot.on_message(filters.command("off") & filters.user(bot.OWNER_ID))
+@Bot.on_message(filters.command("off") & filters.user(OWNER_ID))
 async def stop_checking(client, message):
     if scheduler.running:
         scheduler.shutdown()
-        await message.reply("Stopped checking the YouTube channel for new videos.")
+        await message.reply("Stopped checking YouTube for new videos.")
     else:
         await message.reply("The process is not running.")
+
+@Bot.on_message(filters.user(OWNER_ID) & filters.regex(r'https?://\S+'))
+async def handle_owner_link(client, message):
+    video_url = message.text.strip()
+    video_files = download_videos(video_url, 600)
+    await upload_videos(video_files, CHANNEL_ID)
+    await message.reply("Video downloaded and uploaded to the channel.")
